@@ -1,5 +1,5 @@
 class Contact
-  attr_accessor :id, :first_name, :last_name, :last_name, :phone_number
+  attr_accessor :id, :first_name, :last_name, :phone_number
 
   def initialize(first_name, last_name, phone_number, id = nil)
     @first_name = first_name
@@ -77,11 +77,65 @@ module FileManager
   end
 end
 
+module DBManager
+  require "pg"
+  require "dotenv"
+  Dotenv.load
+
+  class Manager < BaseManager
+    def init_storage
+      begin
+        host = ENV["DB_HOST"] 
+        user = ENV["DB_USER"] 
+        password = ENV["DB_PASSWORD"] 
+        dbname = ENV["DB_NAME"]
+
+        @conn = PG::Connection.open(host: host, dbname: dbname, user: user, password: password)
+        read_from_db
+      rescue PG::ConnectionBad => e
+        puts "Database connection failed: #{e.message}"
+      end
+    end
+
+    def read_from_db
+      @contacts.clear
+      result = @conn.exec("SELECT * FROM contacts ORDER BY created_at")
+      result.each do |record|
+        @contacts << Contact.new(
+          record["first_name"],
+          record["last_name"],
+          record["phone_number"],
+          record["id"].to_i
+        )
+      end
+    end
+
+    def add_contact(first_name, last_name, phone_number)
+      query = "INSERT INTO contacts (first_name, last_name, phone_number, created_at, updated_at)
+      VALUES($1, $2, $3, NOW(), NOW())"
+      @conn.exec_params(query, [first_name, last_name, phone_number])
+      read_from_db
+    end
+
+    def edit_contact(id, first_name, last_name, phone_number)
+      query = "UPDATE contacts SET first_name = $1, last_name = $2, phone_number = $3, updated_at = NOW() WHERE id = $4"
+      @conn.exec_params(query, [first_name, last_name, phone_number, id])
+      read_from_db
+    end
+
+    def delete_contact(id)
+      query = "DELETE FROM contacts WHERE id = $1"
+      @conn.exec_params(query, [id])
+      read_from_db
+    end
+  end
+end
+
 class UI
   MAX_RETRIES = 5
 
   def initialize
-    @manager = FileManager::Manager.new
+    @manager = DBManager::Manager.new
     main_menu
   end
 
@@ -123,12 +177,10 @@ class UI
         return idx
       end
 
-       count += 1
-    return :stop if exceeded_limit?(count, retry_limit)
-    puts error_msg
+      count += 1
+      return :stop if exceeded_limit?(count, retry_limit)
+      puts error_msg
     end
-
-   
   end
 
   def attempt_count(count)
@@ -169,9 +221,9 @@ class UI
   end
 
   def attempts_count(count)
-   puts "#{MAX_RETRIES - count} remaining attempts"
+    puts "#{MAX_RETRIES - count} remaining attempts"
   end
-  
+
   def prompt_with_retry(prompt_text, default: nil, validator: nil)
     count = 0
     loop do
